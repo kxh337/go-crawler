@@ -3,6 +3,7 @@ package main
 import (
 	"net/url"
 	"fmt"
+	"strings"
 )
 
 func normalizeURL(input string) (string, error){
@@ -10,5 +11,5 @@ func normalizeURL(input string) (string, error){
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("%v%v", u.Host, u.Path), nil
+	return strings.TrimRight(fmt.Sprintf("%v%v", u.Host, u.Path), "/"), nil
 }

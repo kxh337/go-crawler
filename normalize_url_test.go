@@ -20,6 +20,11 @@ func TestNormalizeURL(t *testing.T) {
 			inputURL: "",
 			expected: "",
 		},
+		{
+			name:     "empty string",
+			inputURL: "https://blog.boot.dev/path/",
+			expected: "blog.boot.dev/path",
+		},
         // add more test cases here
 	}
 
