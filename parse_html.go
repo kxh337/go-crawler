@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"sync"
 
 	"github.com/PuerkitoBio/goquery"
 )
@@ -20,23 +21,49 @@ type PageData struct {
 	ImageURLs []string
 }
 
-func crawlPage(rawBaseURL, rawCurrentURL string, pages map[string]int) {
-	if !strings.HasPrefix(rawCurrentURL, rawBaseURL) {
+type config struct {
+	pages              map[string]PageData
+	baseURL            *url.URL
+	mu                 *sync.Mutex
+	concurrencyControl chan struct{}
+	wg                 *sync.WaitGroup
+	maxPages 	 	   int
+}
+
+func (cfg *config) crawlPage(rawCurrentURL string) {
+	cfg.concurrencyControl <- struct{}{}
+	cfg.wg.Add(1)
+	defer func() {
+		<- cfg.concurrencyControl
+		cfg.wg.Done()
+	} ()
+
+	cfg.mu.Lock()
+	if len(cfg.pages) >= cfg.maxPages {
+		cfg.mu.Unlock()
 		return
 	}
+	cfg.mu.Unlock()
+
+	if !strings.HasPrefix(rawCurrentURL, cfg.baseURL.String()) {
+		return
+	}
+
 	normUrl, err := normalizeURL(rawCurrentURL)
 	if err != nil {
 		fmt.Println("Failed to normalize the URL")
 		fmt.Printf("Error: %v\n", err)
 		return
 	}
-	_, ok := pages[normUrl]
+
+	cfg.mu.Lock()
+	_, ok := cfg.pages[normUrl]
+	cfg.mu.Unlock()
+
 	if ok {
-		pages[normUrl]++
-		return
-	} else {
-		pages[normUrl] = 1
-	}
+		return 
+	} 
+
 	html, err := getHTML(rawCurrentURL)
 	if err != nil {
 		fmt.Printf("Failed to parse html in page: %v\n", rawCurrentURL)
@@ -44,24 +71,36 @@ func crawlPage(rawBaseURL, rawCurrentURL string, pages map[string]int) {
 		return
 	}
 
-	pageData := extractPageData(html, rawBaseURL)
-	fmt.Println("Found the following links:")
-	for _, l := range pageData.OutgoingLinks {
-		fmt.Printf("%v\n",l)
+	pageData := cfg.extractPageData(html, rawCurrentURL)
+	cfg.mu.Lock()
+	if len(cfg.pages) >= cfg.maxPages {
+		cfg.mu.Unlock()
+		return
 	}
+	fmt.Printf("Added entry for %v\n", normUrl)
+	cfg.pages[normUrl] = pageData
+	cfg.mu.Unlock()
 
-	for _, outgoingUrl := range pageData.OutgoingLinks {
-		nl, err:= normalizeURL(outgoingUrl)
+	for _, outgoingUrl := range cfg.pages[normUrl].OutgoingLinks {
+		nl, err := normalizeURL(outgoingUrl)
 		if err != nil{
 			fmt.Printf("Failed to normalize url: %v\n", outgoingUrl)
 			return
 		}
-		_, ok := pages[nl]
-		if !ok  {
-			time.Sleep(5 * time.Second)
-			fmt.Printf("Crawling next link: %v\n", outgoingUrl)
-			crawlPage(rawBaseURL, outgoingUrl, pages)
+
+		cfg.mu.Lock()
+		_, ok := cfg.pages[nl]
+		if len(cfg.pages) >= cfg.maxPages {
+			cfg.mu.Unlock()
+			return
 		}
+		cfg.mu.Unlock()
+
+		if !ok  {
+			time.Sleep(0 * time.Second)
+			fmt.Printf("Crawling: %v\n", outgoingUrl)
+			go cfg.crawlPage(outgoingUrl)
+		} 
 	}
 }
 
@@ -84,22 +123,19 @@ func getHTML(rawURL string) (string, error) {
 	return string(body), err
 }
 
-func extractPageData(html, pageURL string) PageData {
+func (cfg *config) extractPageData(html, pageURL string) PageData {
 	var res PageData
 	res.URL = pageURL
 	res.H1 = getH1FromHTML(html)
 	res.FirstParagraph = getFirstParagraphFromHTML(html)
-	baseURL, err := url.Parse(pageURL)
-	if err != nil {
-		log.Fatal("Failed to parse URL")
-	}
 
-	res.OutgoingLinks, err = getURLsFromHTML(html, baseURL)
+	var err error
+	res.OutgoingLinks, err = getURLsFromHTML(html, cfg.baseURL)
 	if err != nil {
 		log.Fatal("Failed to get URLs from HTML")
 	}
 
-	res.ImageURLs, err = getImagesFromHTML(html, baseURL)
+	res.ImageURLs, err = getImagesFromHTML(html, cfg.baseURL)
 	if err != nil {
 		log.Fatal("Failed to parse images from HTML")
 	}
