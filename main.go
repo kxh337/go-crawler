@@ -62,4 +62,9 @@ func main() {
 	}
 	cfg.crawlPage(baseUrl)
 	cfg.wg.Wait()
+	err = writeCSVReport(cfg.pages, "./report.csv")
+	if err != nil {
+		fmt.Printf("Error encounterd: %v\n", err)
+		os.Exit(1)
+	}
 }
